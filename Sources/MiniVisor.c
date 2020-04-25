@@ -213,6 +213,19 @@ AdjustControlValue (
     //
     effectiveValue |= capabilities.Allowed0Settings;
     effectiveValue &= capabilities.Allowed1Settings;
+
+    //
+    // Log if not all requested bits are enabled. This can be fatal but let it run
+    // and see what happens.
+    //
+    if ((effectiveValue & RequestedValue) != RequestedValue)
+    {
+        LOG_WARNING("Not all the requested VM control fields are enabled.");
+        LOG_WARNING("MSR %08x: Requested %08x, Effective %08x",
+                    VmxCapabilityMsr,
+                    RequestedValue,
+                    effectiveValue);
+    }
     return effectiveValue;
 }
 
@@ -363,20 +376,11 @@ BOOLEAN
 IsMiniVisorInstalled (
     )
 {
-    int registers[4];   // EAX, EBX, ECX, and EDX
-    char vendorId[13];
-
     //
     // When our hypervisor is installed, CPUID leaf 40000000h will return
     // "MiniVisor   " as the vendor name.
     //
-    __cpuid(registers, CPUID_HV_VENDOR_AND_MAX_FUNCTIONS);
-    RtlCopyMemory(vendorId + 0, &registers[1], sizeof(registers[1]));
-    RtlCopyMemory(vendorId + 4, &registers[2], sizeof(registers[2]));
-    RtlCopyMemory(vendorId + 8, &registers[3], sizeof(registers[3]));
-    vendorId[12] = ANSI_NULL;
-
-    return (strcmp(vendorId, "MiniVisor   ") == 0);
+    return IsHypervisorPresent("MiniVisor   ");
 }
 
 /*!
@@ -408,7 +412,7 @@ DisableHypervisor (
     // Issues the hypercall to uninstall the hypervisor. This hypercall returns
     // the address of the shared processor context on success.
     //
-    returnedAddress = (SHARED_PROCESSOR_CONTEXT*)AsmVmxCall(VmcallUninstall, 0, 0, 0);
+    returnedAddress = (SHARED_PROCESSOR_CONTEXT*)AsmVmxCall(MV_VMCALL_UNINSTALL, 0, 0, 0);
     MV_ASSERT(returnedAddress != NULL);
 
     //
@@ -541,11 +545,14 @@ IsVmxAvailable (
         (eptVpidCapabilityMsr.InvvpidSingleContext == FALSE) ||
         (eptVpidCapabilityMsr.InvvpidAllContexts == FALSE))
     {
-        LOG_ERROR("EPT is not supported.");
+        LOG_ERROR("EPT is not supported : %016llx", eptVpidCapabilityMsr.Flags);
         goto Exit;
     }
 
-    vmxAvailable = TRUE;
+    //
+    // Finally, check the platform specific requirements.
+    //
+    vmxAvailable = IsVmxAvailableEx();
 
 Exit:
     return vmxAvailable;
